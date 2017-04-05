@@ -1,0 +1,7 @@
+#!/bin/bash
+
+echo "reseting partitioning table"
+partprobe &> /dev/null
+echo "flashing Kernel messages"
+gmesg -c &> /dev/null
+echo "done"

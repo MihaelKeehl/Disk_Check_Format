@@ -1,0 +1,13 @@
+#!/bin/bash
+echo "----====++++ Detecting new drive ++++====----"
+
+while [[ -z "${driveListD// }" ]] ; do
+driveListD=$(lsscsi | grep "disk" | grep -v "sda" | grep "dev/s.. $" | awk '{print substr($0,length-3,3)}')
+sleep 1
+done
+
+mm
+
+echo "Pancake!"
+formatti
+

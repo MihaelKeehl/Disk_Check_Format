@@ -1,0 +1,59 @@
+#!/bin/bash
+
+
+#Developed by Juri  01/2017
+#if you have any queastions or sugestions, please let me know
+
+quickDriveFormat () {
+echo "Formatting the $driveName drive..."
+dd if=/dev/zero of=/dev/$driveName bs=5120000 count=110 conv=notrunc &> /dev/null || :
+dd if=/dev/zero of=/dev/$driveName bs=512 count=20480 seek=$((`blockdev --getsz /dev/$driveName` - 20480)) &> /dev/null || :
+}
+
+finalSmartDriveCheck () {
+#echo "<<< (^o^) >>>"
+serialNumF=$(smartctl -i /dev/${driveName} | grep -i "Serial Number:" | awk -F" " '{print $NF}')
+smartctl -H /dev/$driveName | grep "PASSED" &> /dev/null
+if [ $? -eq 0 ] ; then
+echo "$driveName drive with SN: ${serialNumF} is in a good working condition"
+elif smartctl -H /dev/$driveName | grep "OK" &> /dev/null ; then
+echo "$driveName drive with SN: ${serialNumF} has errors with SMART - BAD"
+elif smartctl -H /dev/$driveName | grep "FAILED!" &> /dev/null ; then
+echo "$driveName drive with SN: ${serialNumF} is marked as FAILED! - DESTROY!"
+else
+echo "$driveName drive with SN: ${serialNumF} might not have SMART enabled. output:"
+smartctl -H /dev/$driveName | grep "SMART overall"
+fi
+}
+
+# Getting drive names in Linux file Hierarhy - only readable drives on raid cards
+numZ=0
+for driveList in $(lsscsi | grep "disk" | grep -v "/dev/sda" | grep "dev/s.. $" | awk '{print substr($0,length-3,3)}') ; do
+numZ=${numZ}+1
+echo "${driveList}"
+
+serialNum=$(smartctl -i /dev/${driveList} | grep -i "Serial Number:" | awk -F" " '{print $NF}')
+if [[ $serialNum == *"S14CNEAD405071E"* ]] ; then continue 2 ; fi
+
+smartctl -H /dev/$driveList | grep "SMART Disabled" &> /dev/null
+if [ $? -eq 0 ] ; then
+smartctl -s on /dev/$driveList &> /dev/null
+fi
+
+driveLettersZ[$numZ]=$driveList
+done
+
+# For formatting drives
+for driveName in ${driveLettersZ[@]} ; do
+quickDriveFormat & done
+wait
+
+printf "\n --> Reading S.M.A.R.T. data from drives...\n"
+for driveName in ${driveLettersZ[@]} ; do
+finalSmartDriveCheck & done
+wait
+
+echo "Trying to stop drives safely"
+for driveName in ${driveLettersZ[@]} ; do
+hdparm -Y /dev/$driveName &> /dev/null || :
+done

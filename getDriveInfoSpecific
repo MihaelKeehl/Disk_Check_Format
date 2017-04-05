@@ -1,0 +1,35 @@
+#!/bin/bash
+echo "-------- +++++++ --------"
+#lsblk -o NAME,SIZE -d | grep -v NAME | grep -v sda
+#disksList=$(lsblk -o NAME,SIZE,MOUNTPOINT,MODEL -d | grep -v NAME | grep -v sda | grep sda*)
+#disksList=$(lsblk -o NAME,SIZE -d | grep -v NAME | grep -v sda | grep sd*)
+
+numZ=0
+for driveList in $(lsscsi | grep "disk" | grep -v "sda" | grep "dev/s.. $" | awk '{print substr($0,length-3,3)}') ; do
+numZ=${numZ}+1
+bayNameT=$(ls /sys/class/block/${driveList}/device/ | grep "enclosure_device:" | awk '{print substr($0,length-1,2)}')
+driveLettersZ[$numZ]=$driveList
+
+sasAddress=$(sed 's/.$//' /sys/class/block/${driveList}/device/sas_address)
+if [[ numZ > 1 ]] ; then
+case "${sasAddressArray[@]}" in *"$sasAddress"*) continue 2 ;; esac
+fi
+sasAddressArray[$numZ]=$(sed 's/.$//' /sys/class/block/${driveList}/device/sas_address)
+
+serialNum=$(smartctl -i /dev/${driveList} | grep -i "Serial Number:" | awk -F" " '{print $NF}')
+
+sasOrNot=$(smartctl -i /dev/${driveList} | grep -i "Transport protocol:" | grep "SAS" | awk -F" " '{print $NF}')
+
+if [[ $sasOrNot != *"SAS"* ]] ; then
+sasOrNot="SATA" ; fi
+
+disksList=$(lsblk -o NAME,SIZE,MODEL -d | grep -v NAME | grep -v sda | grep ${driveList})
+numPartiti=$(grep -c "${driveList}[0-9]" /proc/partitions)
+
+if lsscsi | grep "disk" | grep "dev/${driveList}" | grep "Samsung SSD 8" &> /dev/null ; then
+echo ">>Samsung SSD detected: $driveList drive will be igrored by the scripts"
+echo ">>Use command to format: formatti $driveList" ; fi 
+
+echo "$disksList  SN: $serialNum   in bay $bayNameT    Partitions: $numPartiti  $sasOrNot"
+done
+

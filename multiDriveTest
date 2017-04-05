@@ -1,0 +1,247 @@
+#!/bin/bash
+
+
+#Developed by Juri  04/2016
+#if you have any queastions or sugestions, please let me know
+
+# option -l for a long test, whaich takes about 90 min
+optArgs=lv
+speedTest="short" #about 2min for all tests
+waitTime=2 #2min waiting time by default
+
+while getopts $optArgs opt
+do
+case $opt in
+l) speedTest="long"
+   waitTime=90 ;;
+v) echo "This option is in ptoduction..." ;;
+*) echo "wrong option. no option for quick 5 min check" ;;
+esac
+done
+
+
+successfulBays=/tmp/successfulbays.txt
+truncate -s 0 $successfulBays
+successfulSmartBays=/tmp/successfulsmartbays.txt
+truncate -s 0 $successfulSmartBays
+sasDrives=/tmp/sasdrives.txt
+truncate -s 0 $sasDrives
+okDrives=/tmp/okdrives.txt
+truncate -s 0 $okDrives
+failedBays=/tmp/failedbays.txt
+truncate -s 0 $failedBays
+driveDevNames=/tmp/drivedevnames.txt
+truncate -s 0 $driveDevNames
+driveTestStage1=/tmp/driveteststage1.txt
+truncate -s 0 $driveTestStage1
+driveTestStage2=/tmp/driveteststage2.txt
+truncate -s 0 $driveTestStage2
+testBays=/tmp/testbays.txt
+truncate -s 0 $testBays
+
+bayFind () {
+bayName=$(ls /sys/class/block/${driveName}/device/ | grep "enclosure_device:" | awk '{print substr($0,length-1,2)}')
+echo "$bayName   -- $driveName --"
+}
+
+filterDrivesWithoutBay () {
+# Just an empty for now - does nothing
+numB=${numB}+1
+bayArray[$numB]=$bayName
+num=${num}+1
+}
+
+quickDriveFormat () {
+echo "Formatting the $driveName drive..."
+dd if=/dev/zero of=/dev/$driveName bs=512000 count=100 conv=notrunc &> /dev/null || :
+#(echo o; echo w) | fdisk /dev/$driveName &> /dev/null || :
+dd if=/dev/zero of=/dev/$driveName bs=512 count=10480 seek=$((`blockdev --getsz /dev/$driveName` - 10480)) &> /dev/null || :
+}
+
+writeReadDriveCheck () {
+#printf "\n===NEXT DRIVE===\n"
+local driveName=$1
+echo "testing $driveName drive for read capabilities"
+hdparm -Tt /dev/$driveName
+if [ $? -eq 0 ] ; then
+echo "testing $driveName drive for write capabilities"
+dd if=/dev/$driveName of=ddfile bs=8k count=250000
+#time sh -c "dd if=/dev/$driveName of=ddfile bs=8k count=250000"
+if [ $? -eq 0 ] ; then
+bayFind
+echo "$bayName Bay is OK"
+echo "$driveName" >> /tmp/driveteststage1.txt
+echo "$bayName   -- $driveName --" >> /tmp/successfulbays.txt
+else
+echo " fail 1 "
+bayFind
+echo "$bayName   -- $driveName --" >> /tmp/failedbays.txt
+fi
+else
+echo " fail 2 "
+bayFind
+echo "$bayName   -- $driveName --" >> /tmp/failedbays.txt
+fi
+printf "\n===END OF TEST===\n\n"
+}
+
+startSmartDriveCheck () {
+smartctl -s on -t $speedTest /dev/$driveName &> /dev/null
+}
+
+finalSmartDriveCheck () {
+smartctl -H /dev/$driveName | grep "PASSED"
+if [ $? -eq 0 ] ; then
+echo "$driveName is PASSED"
+bayFind
+sasAddress=$(sed 's/.$//' /sys/class/block/${driveName}/device/sas_address)
+if [[ "${sasAddressArrayD[@]}" == *"$sasAddress"* ]] ; then
+echo "$bayName   -- $driveName --" >> $sasDrives ; else
+echo "$bayName $driveName " >> $okDrives ; fi
+elif smartctl -H /dev/$driveName | grep "OK" ; then
+echo "$driveName is OK"
+bayFind
+echo "$bayName $driveName " >> $okDrives
+elif smartctl -H /dev/$driveName | grep "FAILED!" ; then
+bayFind
+echo "$bayName $driveName is marked as FAILED!"
+echo "$bayName   -- $driveName --" >> /tmp/failedbays.txt
+else
+bayFind
+echo "$bayName Drive $driveName might have faults"
+echo "$bayName   -- $driveName --" >> $testBays
+fi
+}
+
+#declare -A drives
+
+# Getting drive names in Linux file Hierarhy - only readable drives on raid cards
+numZ=0
+for driveList in $(lsscsi | grep "disk" | grep -v "Samsung SSD 8" | grep "dev/s.. $" | awk '{print substr($0,length-3,3)}') ; do
+numZ=${numZ}+1
+bayNameT=$(ls /sys/class/block/${driveList}/device/ | grep "enclosure_device:" | awk '{print substr($0,length-1,2)}')
+echo "${driveList} in bay $bayNameT"
+
+sasAddress=$(sed 's/.$//' /sys/class/block/${driveList}/device/sas_address)
+if [[ numZ > 1 ]] ; then
+case "${sasAddressArray[@]}" in *"$sasAddress"*) echo "$driveList in $bayNameT is a dublicate SAS drive - SAS drives will display SMART errors"
+sasAddressArrayD[$numZ]=$sasAddress
+SASdetected=666 && continue 2 ;; esac
+fi
+sasAddressArray[$numZ]=$(sed 's/.$//' /sys/class/block/${driveList}/device/sas_address)
+
+smartctl -H /dev/$driveList | grep "SMART Disabled"
+if [ $? -eq 0 ] ; then
+smartctl -s on /dev/$driveList &> /dev/null
+fi
+
+driveLettersZ[$numZ]=$driveList
+done
+
+for driveList in $(lsscsi | grep "disk" | grep -v "Samsung SSD 8" | grep "dev/s..[a-z]$" | awk '{print substr($0,length-3,4)}') ; do
+numZ=${numZ}+1
+driveLettersZ[$numZ]=$driveList
+echo ${driveLettersZ[$numZ]}
+done
+
+printf "=================================\n"
+echo "The rest drives were not detected, or not enough time to be detected"
+printf "=================================\n"
+
+# Filtering our drives without a bay number
+num=0
+numB=0
+for driveName in ${driveLettersZ[@]} ; do
+filterDrivesWithoutBay
+done
+
+# For formatting drives
+for driveName in ${driveLetters[@]} ; do
+quickDriveFormat & done
+wait
+
+printf "\n\n=================================\n"
+echo "The main part for checking drives for write and read capabilities"
+#for driveName in ${driveLetters[@]} ; do
+#writeReadDriveCheck & done
+#wait
+
+for driveName in ${driveLetters[@]} ; do
+echo "$driveName" >> $driveDevNames
+done
+
+
+export -f writeReadDriveCheck
+export -f bayFind
+
+parallel -j24 --progress writeReadDriveCheck {} :::: /tmp/drivedevnames.txt
+#parallel --bibtex -j24 --bar --progress --delay 5 writeReadDriveCheck {} :::: /tmp/drivedevnames.txt
+#cat $driveDevNames | parallel --wait --bibtex -j24 --bar --progress writeReadDriveCheck
+#cat $driveDevNames | parallel -j24 --bar writeReadDriveCheck
+#wait
+
+numS=0
+while read line
+do
+numS=${numS}+1
+driveLettersS[$numS]=$line
+echo "$line drive will be processed by SMART."
+done <$driveTestStage1
+
+# Main part of the script for smart stat drive checking
+echo "1st S.M.A.R.T. test will be running for $waitTime minutes exactly"
+echo "================================================================="
+for driveName in ${driveLettersS[@]} ; do
+startSmartDriveCheck & done
+wait
+
+sleep ${waitTime}m
+
+printf "\n\n=================================\n"
+printf "Reading new S.M.A.R.T. data from drives...\n"
+for driveName in ${driveLettersS[@]} ; do
+finalSmartDriveCheck & done
+wait
+
+
+echo "Trying to stop drives safely"
+for driveName in ${driveLetters[@]} ; do
+hdparm -Y /dev/$driveName &> /dev/null || :
+done
+
+printf "\n\n=================================\n"
+while read line
+do
+echo "$line Bay contains working drive. PASSED"
+done <$successfulSmartBays | sort
+while read line
+do
+echo "$line Bay contains SAS drive and it seems OK"
+done <$sasDrives | sort
+
+printf "==============================--->\n"
+
+while read line
+do
+echo "$line Bay Drive contains drive with some errors."
+done <$okDrives | sort
+
+while read line
+do
+echo "$line Bay Drive has problems with SMART testing, please double check with (smartctl -H /dev/sdX) "
+done <$testBays | sort
+
+while read line
+do
+echo "$line Bay Drive is FAULTY"
+done <$failedBays | sort
+
+printf "==============end================\n"
+echo "if more then 1 drive is not getting detected - POWER CYCLE the server"
+echo "please put 1 drive at a time if drives are not detected"
+
+if [[ $SASdetected = 667 ]] ; then
+echo "SAS drives detected !!! WARNING !!!"
+echo "this server hates SAS drives, so it will tell that they have some errros"
+echo "just listen for noise or get a feel of an vibration when taking it out, otherwise it should be fine"
+fi

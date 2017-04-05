@@ -1,0 +1,137 @@
+#!/bin/bash
+
+
+#Developed by Juri  04/2016
+#if you have any queastions or sugestions, please let me know
+
+# option -l for a long test, whaich takes about 90 min
+optArgs=lv
+speedTest="short" #about 2min for all tests
+waitTime=2 #2min waiting time by default
+
+while getopts $optArgs opt
+do
+case $opt in
+l) speedTest="long"
+   waitTime=90 ;;
+v) echo "This option is in ptoduction..." ;;
+*) echo "wrong option. no option for quick 5 min check" ;;
+esac
+done
+
+testBays=/tmp/testbays.txt
+truncate -s 0 $testBays
+failedBays=/tmp/failedbays.txt
+truncate -s 0 $failedBays
+
+quickDriveFormat () {
+echo "Formatting the $driveName drive..."
+dd if=/dev/zero of=/dev/$driveName bs=51200 count=100 conv=notrunc &> /dev/null || :
+dd if=/dev/zero of=/dev/$driveName bs=512 count=40480 seek=$((`blockdev --getsz /dev/$driveName` - 10480)) &> /dev/null || :
+}
+
+writeReadDriveCheck () {
+#printf "\n===NEXT DRIVES===\n"
+hdparm -Tt /dev/$driveName
+if [ $? -eq 0 ] ; then
+dd if=/dev/$driveName of=ddfile bs=8k count=250000
+#time sh -c "dd if=/dev/$driveName of=ddfile bs=8k count=250000"
+if [ $? -eq 0 ] ; then
+echo "$driveName" >> $testBays
+else
+serialNumF=$(smartctl -i /dev/${driveName} | grep -i "Serial Number:" | awk -F" " '{print $NF}')
+echo "$driveName drive with SN: ${serialNumF} has FAILED write test"
+echo "$driveName drive with SN: ${serialNumF} has FAILED write test" >> $failedBays
+fi
+else
+serialNumF=$(smartctl -i /dev/${driveName} | grep -i "Serial Number:" | awk -F" " '{print $NF}')
+echo "$driveName drive with SN: ${serialNumF} has FAILED read test"
+echo "$driveName drive with SN: ${serialNumF} has FAILED read test" >> $failedBays
+fi
+#printf "===NEXT===\n"
+}
+
+startSmartDriveCheck () {
+smartctl -s on -t $speedTest /dev/$driveName &> /dev/null
+}
+
+finalSmartDriveCheck () {
+serialNumF=$(smartctl -i /dev/${driveName} | grep -i "Serial Number:" | awk -F" " '{print $NF}')
+smartctl -H /dev/$driveName | grep "PASSED" &> /dev/null
+if [ $? -eq 0 ] ; then
+echo "$driveName drive with SN: ${serialNumF} is in a good working condition"
+elif smartctl -H /dev/$driveName | grep "OK" &> /dev/null ; then
+echo "$driveName drive with SN: ${serialNumF} has errors with SMART - BAD"
+elif smartctl -H /dev/$driveName | grep "FAILED!" &> /dev/null ; then
+echo "$driveName drive with SN: ${serialNumF} is marked as FAILED! - DESTROY!"
+else
+echo "----++++----"
+echo "$driveName drive with SN: ${serialNumF} might not have SMART enabled. output:"
+smartctl -H /dev/$driveName | grep "SMART overall"
+fi
+}
+
+
+# Getting drive names in Linux file Hierarhy - only readable drives on raid cards
+numZ=0
+for driveList in $(lsscsi | grep "disk" | grep -v "/dev/sda" | grep "dev/s.. $" | awk '{print substr($0,length-3,3)}') ; do
+numZ=${numZ}+1
+
+serialNum=$(smartctl -i /dev/${driveList} | grep -i "Serial Number:" | awk -F" " '{print $NF}')
+if [[ $serialNum == *"S14CNEAD405071E"* ]] ; then continue 2 ; fi
+
+echo "$driveList drive with SN: $serialNum "
+
+smartctl -H /dev/$driveList | grep "SMART Disabled" &> /dev/null
+if [ $? -eq 0 ] ; then
+smartctl -s on /dev/$driveList &> /dev/null
+fi
+
+driveLetters[$numZ]=$driveList
+done
+
+
+# For formatting drives
+for driveName in ${driveLetters[@]} ; do
+quickDriveFormat & done
+wait
+
+printf "\n=================================\n"
+echo "The main part for checking drives for write and read capabilities"
+for driveName in ${driveLetters[@]} ; do
+writeReadDriveCheck & done
+wait
+
+numS=0
+while read line
+do
+numS=${numS}+1
+driveLettersS[$numS]=$line
+done <$testBays
+
+# Main part of the script for smart stat drive checking
+echo "================================================================="
+echo "1st S.M.A.R.T. test will be running for $waitTime minutes exactly"
+for driveName in ${driveLettersS[@]} ; do
+startSmartDriveCheck & done
+wait
+
+sleep ${waitTime}m
+
+printf "\n=================================\n"
+printf "Reading new S.M.A.R.T. data from drives...\n\n"
+for driveName in ${driveLettersS[@]} ; do
+finalSmartDriveCheck & done
+wait
+
+while read line
+do
+echo "$line"
+done <$failedBays
+
+echo "...Trying to stop drives safely"
+for driveName in ${driveLetters[@]} ; do
+hdparm -Y /dev/$driveName &> /dev/null || :
+done
+
+

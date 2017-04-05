@@ -1,0 +1,4 @@
+#!/bin/bash
+driveName=$1
+bayName=$(ls /sys/class/block/${driveName}/device/ | grep "enclosure_device:" | awk '{print substr($0,length-1,2)}')
+echo "$bayName"

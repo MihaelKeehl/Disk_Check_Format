@@ -1,0 +1,141 @@
+#!/bin/bash
+
+
+#Developed by Juri  04/2016
+#if you have any queastions or sugestions, please let me know
+
+successfulSmartBays=/tmp/successfulsmartbays.txt
+truncate -s 0 $successfulSmartBays
+okDrives=/tmp/okdrives.txt
+truncate -s 0 $okDrives
+sasDrives=/tmp/sasdrives.txt
+truncate -s 0 $sasDrives
+failedBays=/tmp/failedbays.txt
+truncate -s 0 $failedBays
+testBays=/tmp/testbays.txt
+truncate -s 0 $testBays
+
+
+bayFind () {
+bayName=$(ls /sys/class/block/${driveName}/device/ | grep "enclosure_device:" | awk '{print substr($0,length-1,2)}')
+echo "$bayName   -- $driveName --"
+}
+
+quickDriveFormat () {
+#dmraid -r -E /dev/$driveName #&> /dev/null || :
+echo "Formatting the $driveName drive..."
+#(echo o; echo w) | fdisk /dev/$driveName &> /dev/null || :
+dd if=/dev/zero of=/dev/$driveName bs=5120000 count=110 conv=notrunc &> /dev/null || :
+#to format last disk blocks
+#dd if=/dev/zero of=/dev/$driveName bs=5120000 seek=$(( $(blockdev --getsz /dev/$driveName) - 1 )) count=1
+dd if=/dev/zero of=/dev/$driveName bs=512 count=20480 seek=$((`blockdev --getsz /dev/$driveName` - 20480)) &> /dev/null || :
+}
+
+finalSmartDriveCheck () {
+smartctl -H /dev/$driveName | grep "PASSED"
+#smartctl -q errorsonly -H -l selftest -l error /dev/sdb
+if [ $? -eq 0 ] ; then
+bayFind
+echo "$bayName   -- $driveName --" >> $successfulSmartBays
+elif smartctl -H /dev/$driveName | grep "OK" ; then
+bayFind
+sasAddress=$(sed 's/.$//' /sys/class/block/${driveName}/device/sas_address)
+if [[ "${sasAddressArrayD[@]}" == *"$sasAddress"* ]] ; then
+echo "$bayName   -- $driveName --" >> $sasDrives ; else
+echo "$bayName $driveName " >> $okDrives ; fi
+elif smartctl -H /dev/$driveName | grep "FAILED!" ; then
+bayFind
+echo "$bayName $driveName is marked as FAILED!"
+echo "$bayName   -- $driveName --" >> $failedBays
+else
+bayFind
+echo "$bayName Drive $driveName might not have SMART enabled"
+echo "$bayName   -- $driveName --" >> $testBays
+fi
+}
+
+# option can format ignored Samsung drive, like "formatti sdb", don't use sda.
+if [ -n "$1" ] && [ "$1" != "sda" ] ; then
+driveName="$1"
+quickDriveFormat
+smartctl -H /dev/$driveName | grep "SMART overall-health self-assessment test result:"
+exit 1
+else
+
+# Getting drive names in Linux file Hierarhy - only readable drives on raid cards
+numZ=0
+for driveList in $(lsscsi | grep "disk" | grep -v "Samsung SSD 8" | grep "dev/s.. $" | awk '{print substr($0,length-3,3)}') ; do
+numZ=${numZ}+1
+bayNameT=$(ls /sys/class/block/${driveList}/device/ | grep "enclosure_device:" | awk '{print substr($0,length-1,2)}')
+echo "${driveList} in bay $bayNameT"
+
+sasAddress=$(sed 's/.$//' /sys/class/block/${driveList}/device/sas_address)
+if [[ numZ > 1 ]] ; then
+case "${sasAddressArray[@]}" in *"$sasAddress"*) echo "$driveList in $bayNameT is a dublicate SAS drive - SAS drives will display SMART errors"
+sasAddressArrayD[$numZ]=$sasAddress
+SASdetected=666 && continue 2 ;; esac
+fi
+sasAddressArray[$numZ]=$(sed 's/.$//' /sys/class/block/${driveList}/device/sas_address)
+
+smartctl -H /dev/$driveList | grep "SMART Disabled"
+if [ $? -eq 0 ] ; then
+smartctl -s on /dev/$driveList &> /dev/null
+fi
+
+driveLettersZ[$numZ]=$driveList
+done
+
+for driveList in $(lsscsi | grep "disk" | grep -v "Samsung SSD 8" | grep "dev/s..[a-z]$" | awk '{print substr($0,length-3,4)}') ; do
+numZ=${numZ}+1
+driveLettersZ[$numZ]=$driveList
+echo ${driveLettersZ[$numZ]}
+done
+fi
+
+printf "=================================\n"
+echo "The rest drives were not detected, or not enough time to be detected"
+printf "=================================\n"
+
+# For formatting drives
+for driveName in ${driveLettersZ[@]} ; do
+quickDriveFormat & done
+wait
+
+printf "\n --> Reading S.M.A.R.T. data from drives...\n"
+for driveName in ${driveLettersZ[@]} ; do
+finalSmartDriveCheck & done
+wait
+
+echo "Trying to stop drives safely"
+for driveName in ${driveLettersZ[@]} ; do
+hdparm -Y /dev/$driveName &> /dev/null || :
+done
+
+printf "\n\n=================================\n"
+while read line
+do
+echo "$line Bay contains working drive. PASSED"
+done <$successfulSmartBays | sort
+while read line
+do
+echo "$line Bay contains SAS drive and it seems OK"
+done <$sasDrives | sort
+
+printf "==============================--->\n"
+
+while read line
+do
+echo "$line Bay Drive contains drive with some errors."
+done <$okDrives | sort
+
+while read line
+do
+echo "$line Bay Drive has problems with SMART testing, please double check with (smartctl -H /dev/sdX) "
+done <$testBays | sort
+
+while read line
+do
+echo "$line Bay Drive is FAULTY"
+done <$failedBays | sort
+
+printf "==============end================\n"

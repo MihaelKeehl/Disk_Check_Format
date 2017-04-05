@@ -1,0 +1,29 @@
+#!/bin/bash
+echo "----====++++ Detecting new drive ++++====----"
+
+while [[ -z "${driveListD// }" ]] ; do
+driveListD=$(lsscsi | grep "disk" | grep -v "sda" | grep "dev/s.. $" | awk '{print substr($0,length-3,3)}')
+sleep 1
+done
+
+numZ=0
+for driveList in $(lsscsi | grep "disk" | grep -v "sda" | grep "dev/s.. $" | awk '{print substr($0,length-3,3)}') ; do
+numZ=${numZ}+1
+
+bayNameT=$(ls /sys/class/block/${driveList}/device/ | grep "enclosure_device:" | awk '{print substr($0,length-1,2)}')
+disksList=$(lsblk -o NAME,SIZE,MODEL -d | grep -v NAME | grep -v sda | grep ${driveList})
+numPartiti=$(grep -c "${driveList}[0-9]" /proc/partitions)
+
+if lsscsi | grep "disk" | grep "dev/${driveList}" | grep "Samsung SSD 8" &> /dev/null ; then
+echo ">>Samsung SSD detected: e "fff" fommand to format sdb drive"
+exit 1
+fi
+
+echo "$disksList     in bay $bayNameT    Partitions: $numPartiti"
+
+done
+
+echo "Pancake!"
+sleep 1
+formatti
+

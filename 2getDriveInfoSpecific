@@ -1,0 +1,19 @@
+#!/bin/bash
+#echo "-------- +++++++ --------"
+#lsblk -o NAME,SIZE -d | grep -v NAME | grep -v sda
+#disksList=$(lsblk -o NAME,SIZE,MOUNTPOINT,MODEL -d | grep -v NAME | grep -v sda | grep sda*)
+#disksList=$(lsblk -o NAME,SIZE -d | grep -v NAME | grep -v sda | grep sd*)
+
+numZ=0
+for driveList in $(lsscsi | grep "disk" | grep -v "sda" | grep "dev/s.. $" | awk '{print substr($0,length-3,3)}') ; do
+numZ=${numZ}+1
+driveLettersZ[$numZ]=$driveList
+
+serialNum=$(smartctl -i /dev/${driveList} | grep -i "Serial Number:" | awk -F" " '{print $NF}')
+
+disksList=$(lsblk -o NAME,SIZE,MODEL -d | grep -v NAME | grep -v sda | grep ${driveList})
+numPartiti=$(grep -c "${driveList}[0-9]" /proc/partitions)
+
+echo "$disksList  SN: $serialNum  Partitions: $numPartiti "
+done
+
